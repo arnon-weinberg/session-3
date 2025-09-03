@@ -1,0 +1,8 @@
+{
+  "name": "session@research-lab.ca",
+  "description": "Save and restore your GNOME Shell desktop active running application windows and their positions across multiple workspaces",
+  "uuid": "session@research-lab.ca",
+  "shell-version": [
+    "40"
+  ]
+}
