@@ -1,3 +1,4 @@
+
 /* extension.js
  *
  * This program is free software: you can redistribute it and/or modify
@@ -33,16 +34,17 @@ let opt = {
     // Applications that manage their own session restore:
     self_managed: [
         'firefox',
+        'Google-chrome',
     ],
 };
 
 /* ToDo:
-    self_managed: Chrome, LibreOffice (sometimes?)
+    self_managed: LibreOffice (sometimes?)
     Save settings in the session.ini file so that they can be modified there
     Offer auto-save on window create/move/resize/close and auto-restore on GNOME startup
     DFS() for >12(?) windows
 
-    journalctl -f GNOME_SHELL_EXTENSION_UUID=session@research-lab.ca -q --output=json --all | jq --unbuffered -r '"\(.["__REALTIME_TIMESTAMP"] | tonumber / 1000000 | todateiso8601 | sub("Z$"; "")): \(.MESSAGE)"' | tee journalctl.cloudy
+    journalctl -f GNOME_SHELL_EXTENSION_UUID=session@research-lab.ca -q --output=json --all | jq --unbuffered -r '"\(.["__REALTIME_TIMESTAMP"] | tonumber / 1000000 | todateiso8601 | sub("Z$"; "")): \(.MESSAGE)"' | tee journalctl
 
     Impress opening dialog blocks all other LibreOffice launches! (sometimes?)
         Nautilus dialog does not block other launches.
@@ -57,13 +59,13 @@ function debug(level, entry) {
         4: 'DEBUG',
     };
 
-    if (level > opt.debug) return;
-    if (entry instanceof Error) {
+    if (level === 0) {
+        if (typeof entry === 'string') entry = new Error(entry);
         log(`${levels[level]}: ${entry.message}\n${entry.stack}`);
-        if (level === 0) throw entry;
-    } else {
+        Main.notify(_('Runtime error'), _(entry.message), null);
+        throw entry;
+    } else if (level <= opt.debug) {
         log(`${levels[level]}: ${entry}`);
-        if (level === 0) throw new Error(entry);
     }
 }
 
@@ -107,7 +109,7 @@ class Desktop {
         content = JSON.stringify(content, null, 2);
         GLib.file_set_contents(opt.filename, content);
 
-        Main.notify(_('Session saved'), _(`Saved windows to ${opt.filename}`), null);
+        Main.notify(_('Session saved'), _(`Saved session to ${opt.filename}`), null);
         debug(3, `Saved windows to ${opt.filename}`);
 
         return true;
