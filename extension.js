@@ -747,16 +747,15 @@ function normal(window) {
 }
 
 const Indicator = GObject.registerClass(
-class Indicator extends PanelMenu.Button {
+class Indicator extends PopupMenu.PopupSubMenuMenuItem {
     _init() {
-        super._init(0.0, _(GETTEXT_DOMAIN));
+        super._init(_('Session'));
 
-        this.add_child(new St.Icon({
+        let icon = new St.Icon({
             icon_name: 'view-paged-rtl-symbolic',
-            style_class: 'system-status-icon',
-        }));
-
-        this.menu.removeAll();
+            style_class: 'popup-menu-icon',
+        });
+        this.actor.insert_child_at_index(icon, 1);
 
         let item = new PopupMenu.PopupMenuItem(_('Save session'));
         item.connect('activate', () => {
@@ -772,7 +771,7 @@ class Indicator extends PanelMenu.Button {
 
         for (let item of [[0, 'existing'], [1, 'matching'], [2, 'missing']]) {
             let [level, desc] = item;
-            item = new PopupMenu.PopupMenuItem(_(`Restore session ${desc}`));
+            item = new PopupMenu.PopupMenuItem(_(`Restore ${desc}`));
             item.connect('activate', () => {
                 try {
                     debug(2, `Restoring session (${level}).`);
@@ -799,7 +798,8 @@ class Extension {
 
     enable() {
         this._indicator = new Indicator();
-        Main.panel.addToStatusArea(this._uuid, this._indicator);
+        let menu = Main.panel.statusArea.aggregateMenu.menu;
+        menu.addMenuItem(this._indicator, menu.numMenuItems - 1);
     }
 
     disable() {
