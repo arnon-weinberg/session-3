@@ -17,15 +17,12 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
-const GETTEXT_DOMAIN = 'GNOME Session Save and Restore';
-
 const ByteArray = imports.byteArray;
 const { GObject, St, Meta, GLib, Gio, Shell } = imports.gi;
 const { main: Main, panelMenu: PanelMenu, popupMenu: PopupMenu } = imports.ui;
 const ExtensionUtils = imports.misc.extensionUtils;
 
-const Gettext = imports.gettext.domain(GETTEXT_DOMAIN);
-const _ = Gettext.gettext;
+let _; // Internationalization translation function is initialized by init()
 
 // Global settings:
 let opt = {
@@ -42,7 +39,6 @@ let opt = {
     self_managed: LibreOffice (sometimes?)
     Save settings in the session.ini file so that they can be modified there
     Offer auto-save on window create/move/resize/close and auto-restore on GNOME startup
-    DFS() for >12(?) windows
 
     journalctl -f GNOME_SHELL_EXTENSION_UUID=session@research-lab.ca -q --output=json --all | jq --unbuffered -r '"\(.["__REALTIME_TIMESTAMP"] | tonumber / 1000000 | todateiso8601 | sub("Z$"; "")): \(.MESSAGE)"' | tee journalctl
 
@@ -337,49 +333,90 @@ class Session {
         for (let group of Object.keys(scores)) {
             debug(3, `Group ${group} (${Object.keys(scores[group]).length} windows)...`);
 
-            let [score, map] = depth_first_search ( scores[group] );
-            // This is basically a travelling salesman problem, solved using a
-            // recursive depth-first search algorithm... It goes through every
-            // possible restore<->current set (map) combination, to find which
-            // has the highest total score.
-            function depth_first_search(group, _rid={}, _cid={}) {
-                // Pick the next restore window ID:
-                let rid = Object.keys(group).find(r => !_rid[r]) || null;
-                if (!rid) return [0, _rid];
+            let [score, map] = hungarian_match ( scores[group] );
+            // This is a Hungarian maximum-weight bipartite matching algorithm:
+            // It goes through every possible restore<->current set (map)
+            // combination, to find which has the highest total score.
+            function hungarian_match(group) {
+                let rids = Object.keys(group);
 
-                let best = { score: 0 };
+                let cids = new Set();
+                for (let rid of rids) for (let cid of Object.keys(group[rid])) cids.add(cid);
+                cids = [...cids]; // Remove duplicates
 
-                // No match case (ie, fewer current windows than restore session):
-                let NULL = (Object.keys(group).length - Object.keys(group[rid]).length
-                            > Object.values(_rid).filter(n => /^NULL#\d+$/.test(n)).length)
-                           ? [`NULL#${Object.keys(_rid).length}`] : [];
+                // No match case (fewer current windows than restore session):
+                while (cids.length < rids.length) cids.push(`NULL#${cids.length}`);
 
-                // Pick the next current window ID:
-                for (let cid of [...Object.keys(group[rid]), ...NULL]) {
-                    if (_cid[cid]) continue;
-                    _cid[cid] = true;
-                    _rid[rid] = cid;
-                    let _score = /^NULL#\d+$/.test(cid) ? 1 : group[rid][cid];
+                // Since the Hungarian algorithm minimizes, build the cost nxn
+                // matrix using costs = negated scores:
+                const n = Math.max(rids.length, cids.length);
+                const cost = Array.from({ length: n }, (_, i) => {
+                    if (i >= rids.length) return new Array(n).fill(-1); // Unmatched current window
+                    return Array.from({ length: n }, (_, j) => {
+                        if (/^NULL#\d+$/.test(cids[j])) return -1; // Unmatched restore window
+                        return -group[rids[i]][cids[j]]; // cost[i][j] = cost of assigning rids[i] → cids[j]
+                    })
+                });
 
-                    debug(4, ('  '.repeat(Object.keys(_rid).length)) + `Trying ${rid} + ${cid}...`);
-                    let [score, map] = depth_first_search(group, {..._rid}, {..._cid});
-                    best.last = !score; // Only care about score on the last rid
-                    debug(4, ('  '.repeat(Object.keys(_rid).length)) + `Result = ${_score}`
-                           + (score ? ` + ${score} (best) = ${_score + score}` : ''));
-                    score += _score;
-                    if (score > best.score) {
-                        best = {
-                            rid: map,
-                            cid: cid,
-                            last: best.last,
-                            score: score
-                        };
-                    }
+                // Hungarian minimization algorithm:
+                const INF = 1e9;
+                let u = new Array(n + 1).fill(0); // potential for rows
+                let v = new Array(n + 1).fill(0); // potential for columns
+                let p = new Array(n + 1).fill(0); // assignment: p[j] = row assigned to col j (1-indexed)
+                let way = new Array(n + 1).fill(0);
 
-                    delete _cid[cid];
+                for (let i = 1; i <= n; i++) {
+                    p[0] = i;
+                    let j0 = 0;
+                    let minDist = new Array(n + 1).fill(INF);
+                    let used    = new Array(n + 1).fill(false);
+
+                    do {
+                        used[j0] = true;
+                        const i0 = p[j0];
+                        let delta = INF;
+                        let j1 = -1;
+
+                        for (let j = 1; j <= n; j++) {
+                            if (!used[j]) {
+                                let cur = cost[i0 - 1][j - 1] - u[i0] - v[j];
+                                if (cur < minDist[j]) {
+                                    minDist[j] = cur;
+                                    way[j] = j0;
+                                }
+                                if (minDist[j] < delta) {
+                                    delta = minDist[j];
+                                    j1 = j;
+                                }
+                            }
+                        }
+
+                        for (let j = 0; j <= n; j++) {
+                            if (used[j]) {
+                                u[p[j]] += delta;
+                                v[j]    -= delta;
+                            } else {
+                                minDist[j] -= delta;
+                            }
+                        }
+                        j0 = j1;
+                    } while (p[j0] !== 0);
+
+                    do {
+                        p[j0] = p[way[j0]];
+                        j0    = way[j0];
+                    } while (j0);
                 }
 
-                return [best.score, best.score ? best.rid : _rid];
+                let score = 0;
+                let map = {};
+                for (let j = 1; j <= n; j++) {
+                    if (p[j] !== 0 && p[j] - 1 < rids.length) {
+                        map[rids[p[j] - 1]] = cids[j - 1];
+                        score += -cost[p[j] - 1][j - 1]; // Score is negated cost
+                    }
+                }
+                return [score, map];
             }
 
             debug(3, `Best match score = ${score}`);
@@ -793,7 +830,9 @@ class Extension {
     constructor(uuid) {
         this._uuid = uuid;
 
-        ExtensionUtils.initTranslations(GETTEXT_DOMAIN);
+        const name = ExtensionUtils.getCurrentExtension().metadata.name;
+        ExtensionUtils.initTranslations(name);
+        _ = imports.gettext.domain(name).gettext;
     }
 
     enable() {
