@@ -17,12 +17,20 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
-const ByteArray = imports.byteArray;
-const { GObject, St, Meta, GLib, Gio, Shell } = imports.gi;
-const { main: Main, panelMenu: PanelMenu, popupMenu: PopupMenu } = imports.ui;
-const ExtensionUtils = imports.misc.extensionUtils;
+import GObject from 'gi://GObject';
+import Meta    from 'gi://Meta';
+import GLib    from 'gi://GLib';
+import Gio     from 'gi://Gio';
+import Shell   from 'gi://Shell';
 
-let _; // Internationalization translation function is initialized by init()
+import * as Main      from 'resource:///org/gnome/shell/ui/main.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import { QuickMenuToggle, SystemIndicator }
+    from 'resource:///org/gnome/shell/ui/quickSettings.js';
+
+import { Extension as BaseExtension }
+    from 'resource:///org/gnome/shell/extensions/extension.js';
+let _; // Internationalization translation function is initialized by enable()
 
 // Global settings:
 let opt = {
@@ -93,7 +101,7 @@ class Desktop {
 
     _restore() {
         let content = GLib.file_get_contents(opt.filename)[1];
-        content = JSON.parse(ByteArray.toString(content));
+        content = JSON.parse(new TextDecoder().decode(content));
         delete content.opt;
 
         return content;
@@ -136,12 +144,10 @@ class Desktop {
         if (window.minimized) {
             state.minimized = true;
         }
-        if (window.get_maximized() === Meta.MaximizeFlags.BOTH) {
+        if (window.maximized_horizontally) {
             state['maximized-horizontal'] = true;
-            state['maximized-vertical'] = true;
-        } else if (window.get_maximized() === Meta.MaximizeFlags.HORIZONTAL) {
-            state['maximized-horizontal'] = true;
-        } else if (window.get_maximized() === Meta.MaximizeFlags.VERTICAL) {
+        }
+        if (window.maximized_vertically) {
             state['maximized-vertical'] = true;
         }
         if (window.is_fullscreen()) {
@@ -199,7 +205,7 @@ class Desktop {
             let s = 0;
             for (let c = 0; c < content.length; c++) {
                 if (content[c] === 0) {
-                    command.push(ByteArray.toString(content.slice(s, c)));
+                    command.push(new TextDecoder().decode(content.slice(s, c)));
                     s = c + 1;
                 }
             }
@@ -664,7 +670,7 @@ class Session {
         debug(3, `${wait} pending launches.`);
         if (wait) {
             let load = Gio.File.new_for_path('/proc/loadavg').load_contents(null)[1];
-            load = parseFloat(ByteArray.toString(load).split(' ')[0]) || 1.0;
+            load = parseFloat(new TextDecoder().decode(load).split(' ')[0]) || 1.0;
             wait = Math.round(5 + (Math.log(wait)/Math.log(20)) * (25 + 13 * load) + 5 * load);
             debug(4, `Waiting maximum ${wait} more seconds.`);
 
@@ -783,16 +789,16 @@ function normal(window) {
     return window.get_window_type() === Meta.WindowType.NORMAL && !window.get_transient_for();
 }
 
-const Indicator = GObject.registerClass(
-class Indicator extends PopupMenu.PopupSubMenuMenuItem {
+const SessionToggle = GObject.registerClass(
+class SessionToggle extends QuickMenuToggle {
     _init() {
-        super._init(_('Session'));
-
-        let icon = new St.Icon({
+        super._init({
+            title: _('Session'),
             icon_name: 'view-paged-rtl-symbolic',
-            style_class: 'popup-menu-icon',
+            toggle_mode: false,
         });
-        this.actor.insert_child_at_index(icon, 1);
+
+        this.menu.setHeader('view-paged-rtl-symbolic', _('Session'));
 
         let item = new PopupMenu.PopupMenuItem(_('Save session'));
         item.connect('activate', () => {
@@ -806,9 +812,8 @@ class Indicator extends PopupMenu.PopupSubMenuMenuItem {
         });
         this.menu.addMenuItem(item);
 
-        for (let item of [[0, 'existing'], [1, 'matching'], [2, 'missing']]) {
-            let [level, desc] = item;
-            item = new PopupMenu.PopupMenuItem(_(`Restore ${desc}`));
+        for (let [level, desc] of [[0, 'existing'], [1, 'matching'], [2, 'missing']]) {
+            let item = new PopupMenu.PopupMenuItem(_(`Restore ${desc}`));
             item.connect('activate', () => {
                 try {
                     debug(2, `Restoring session (${level}).`);
@@ -823,30 +828,37 @@ class Indicator extends PopupMenu.PopupSubMenuMenuItem {
             });
             this.menu.addMenuItem(item);
         }
+
+        this.connect('clicked', () => this.menu.open());
     }
 });
 
-class Extension {
-    constructor(uuid) {
-        this._uuid = uuid;
+const Indicator = GObject.registerClass(
+class Indicator extends SystemIndicator {
+    _init() {
+        super._init();
 
-        const name = ExtensionUtils.getCurrentExtension().metadata.name;
-        ExtensionUtils.initTranslations(name);
-        _ = imports.gettext.domain(name).gettext;
+        this._toggle = new SessionToggle();
+        this.quickSettingsItems.push(this._toggle);
     }
 
+    destroy() {
+        this._toggle.destroy();
+        super.destroy();
+    }
+});
+
+// Add a System Menu "Indicator" entry containing a "SessionToggle" menu button:
+export default class Extension extends BaseExtension {
     enable() {
+        _ = this.gettext.bind(this);
+
         this._indicator = new Indicator();
-        let menu = Main.panel.statusArea.aggregateMenu.menu;
-        menu.addMenuItem(this._indicator, menu.numMenuItems - 1);
+        Main.panel.statusArea.quickSettings.addExternalIndicator(this._indicator);
     }
 
     disable() {
         this._indicator.destroy();
         this._indicator = null;
     }
-}
-
-function init(meta) {
-    return new Extension(meta.uuid);
 }
